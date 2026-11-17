@@ -10,30 +10,32 @@ import uvicorn
 app = FastAPI(title="Vocab AI Server")
 
 # 1. Load Teachable Machine Model & Labels
+model = None
+class_names = []
+
 try:
     model = tf.keras.models.load_model("keras_model.h5", compile=False)
     with open("labels.txt", "r") as f:
         class_names = [line.strip() for line in f.readlines()]
     print("✅ Model and labels loaded successfully!")
 except Exception as e:
-    print(f"❌ Error loading model: {e}")
+    print(f"❌ ERROR LOADING MODEL: {e}")
 
-# 2. Dictionary for translations (English, Arabic, German)
-# IMPORTANT: These keys must perfectly match the names you used in Teachable Machine!
+# 2. Dictionary for translations
 TRANSLATIONS = {
     "Ball": {"ar": "الكرة", "en": "ball", "de": "Ball"},
     "Cell Phone": {"ar": "هاتف محمول", "en": "cell phone", "de": "Handy"},
     "Shoe": {"ar": "حذاء", "en": "shoe", "de": "Schuh"},
     "Teddy Bear": {"ar": "دبدوب", "en": "teddy bear", "de": "Teddybär"},
-    "TV remote": {"ar": "جهاز التحكم", "en": "TV remote", "de": "Fernbedienung"},
+    "TV Remote": {"ar": "جهاز التحكم", "en": "TV remote", "de": "Fernbedienung"},
     "Bowl": {"ar": "وعاء", "en": "bowl", "de": "Schüssel"},
     "Cup": {"ar": "كوب", "en": "cup", "de": "Tasse"},
     "Plate": {"ar": "طبق", "en": "plate", "de": "Teller"},
     "Spoon": {"ar": "ملعقة", "en": "spoon", "de": "Löffel"},
-    "Water bottle": {"ar": "زجاجة ماء", "en": "water bottle", "de": "Wasserflasche"},
-    "Hairbrash": {"ar": "فرشاة شعر", "en": "hairbrush", "de": "Haarbürste"},
+    "Water Bottle": {"ar": "زجاجة ماء", "en": "water bottle", "de": "Wasserflasche"},
+    "Hairbrush": {"ar": "فرشاة شعر", "en": "hairbrush", "de": "Haarbürste"},
     "Shampoo": {"ar": "شامبو", "en": "shampoo", "de": "Shampoo"},
-    "soap": {"ar": "صابون", "en": "soap", "de": "Seife"},
+    "Soap": {"ar": "صابون", "en": "soap", "de": "Seife"},
     "Toothbrush": {"ar": "فرشاة أسنان", "en": "toothbrush", "de": "Zahnbürste"},
     "Towel": {"ar": "منشفة", "en": "towel", "de": "Handtuch"},
     "Backpack": {"ar": "حقيبة ظهر", "en": "backpack", "de": "Rucksack"},
@@ -45,11 +47,18 @@ TRANSLATIONS = {
 
 @app.get("/health")
 def health():
-    # Used by UptimeRobot to keep the server awake
-    return {"status": "ok"}
+    # This allows you to check if the model loaded successfully
+    return {"status": "ok", "model_loaded": model is not None}
 
 @app.post("/predict")
 async def predict(file: UploadFile = File(...), lang: str = "en"):
+    # Check if model loaded successfully
+    if model is None:
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": "AI Model failed to load on server. Check server logs."}
+        )
+
     try:
         # Read and preprocess the image
         raw = await file.read()
@@ -69,11 +78,10 @@ async def predict(file: UploadFile = File(...), lang: str = "en"):
         raw_label = class_names[index]
         clean_label = raw_label.split(" ", 1)[-1].strip() 
 
-        # Get the translation based on the 'lang' parameter (defaults to English)
+        # Get the translation
         word = TRANSLATIONS.get(clean_label, {}).get(lang, clean_label)
 
-        # Print to logs so you can see it working in the Netrun dashboard!
-        print(f"📸 Image received. AI guessed: {clean_label} ({confidence:.2%}). Language requested: {lang} -> {word}")
+        print(f"📸 AI guessed: {clean_label} ({confidence:.2%}). Word: {word}")
 
         return JSONResponse({
             "success": True,
@@ -84,13 +92,11 @@ async def predict(file: UploadFile = File(...), lang: str = "en"):
         })
         
     except Exception as e:
-        print(f"❌ Error processing image: {e}")
         return JSONResponse(
             status_code=500,
             content={"success": False, "error": str(e)}
         )
 
-# This block allows the server to run on hosting platforms
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
