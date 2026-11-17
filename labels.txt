@@ -1,0 +1,20 @@
+0 Ball
+1 Cell phone
+2 Shoe
+3 Teddy Bear
+4 TV remote
+5 Bowl
+6 Cup
+7 Plate
+8 Spoon
+9 Water bottle
+10 Hairbrash
+11 Shampoo
+12 soap
+13 Toothbrush
+14 Towel
+15 Book
+16 Eraser
+17 Backpack
+18 Notebook
+19 Ruler
