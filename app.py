@@ -1,29 +1,35 @@
-import os
-os.environ["TF_USE_LEGACY_KERAS"] = "1" # <--- THIS IS THE MAGIC FIX
-
 from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import JSONResponse
 from PIL import Image
 import numpy as np
 import io
-import tensorflow as tf
+import tflite_runtime.interpreter as tflite
+import os
 import uvicorn
 
 app = FastAPI(title="Vocab AI Server")
 
-# 1. Load Teachable Machine Model & Labels
-model = None
-class_names = []
-
+# ==========================================
+# 1. LOAD TFLITE MODEL & LABELS
+# ==========================================
+model_path = "model_unquant.tflite"
 try:
-    model = tf.keras.models.load_model("keras_model.h5", compile=False)
+    interpreter = tflite.Interpreter(model_path=model_path)
+    interpreter.allocate_tensors()
+    
+    input_details = interpreter.get_input_details()
+    output_details = interpreter.get_output_details()
+    
     with open("labels.txt", "r") as f:
         class_names = [line.strip() for line in f.readlines()]
-    print("✅ Model and labels loaded successfully!")
+    print("✅ TFLite Model loaded successfully!")
 except Exception as e:
     print(f"❌ ERROR LOADING MODEL: {e}")
+    interpreter = None
 
-# 2. Dictionary for translations
+# ==========================================
+# 2. TRANSLATIONS
+# ==========================================
 TRANSLATIONS = {
     "Ball": {"ar": "الكرة", "en": "ball", "de": "Ball"},
     "Cell Phone": {"ar": "هاتف محمول", "en": "cell phone", "de": "Handy"},
@@ -49,31 +55,39 @@ TRANSLATIONS = {
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "model_loaded": model is not None}
+    return {"status": "ok", "model_loaded": interpreter is not None}
 
 @app.post("/predict")
 async def predict(file: UploadFile = File(...), lang: str = "en"):
-    if model is None:
+    if interpreter is None:
         return JSONResponse(
             status_code=500,
-            content={"success": False, "error": "AI Model failed to load on server. Check server logs."}
+            content={"success": False, "error": "AI Model failed to load on server."}
         )
 
     try:
+        # Read and preprocess the image
         raw = await file.read()
         img = Image.open(io.BytesIO(raw)).convert("RGB").resize((224, 224))
         
+        # Normalize to [-1, 1]
         img_array = np.asarray(img, dtype=np.float32)
         normalized_image_array = (img_array / 127.5) - 1
         data = np.expand_dims(normalized_image_array, axis=0)
 
-        prediction = model.predict(data)
+        # Run AI inference using TFLite
+        interpreter.set_tensor(input_details[0]['index'], data)
+        interpreter.invoke()
+        prediction = interpreter.get_tensor(output_details[0]['index'])
+        
         index = np.argmax(prediction)
         confidence = float(prediction[0][index])
         
+        # Clean up the label
         raw_label = class_names[index]
         clean_label = raw_label.split(" ", 1)[-1].strip() 
 
+        # Get the translation
         word = TRANSLATIONS.get(clean_label, {}).get(lang, clean_label)
 
         print(f"📸 AI guessed: {clean_label} ({confidence:.2%}). Word: {word}")
