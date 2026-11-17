@@ -1,10 +1,12 @@
+import os
+os.environ["TF_USE_LEGACY_KERAS"] = "1" # <--- THIS IS THE MAGIC FIX
+
 from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import JSONResponse
 from PIL import Image
 import numpy as np
 import io
 import tensorflow as tf
-import os
 import uvicorn
 
 app = FastAPI(title="Vocab AI Server")
@@ -47,12 +49,10 @@ TRANSLATIONS = {
 
 @app.get("/health")
 def health():
-    # This allows you to check if the model loaded successfully
     return {"status": "ok", "model_loaded": model is not None}
 
 @app.post("/predict")
 async def predict(file: UploadFile = File(...), lang: str = "en"):
-    # Check if model loaded successfully
     if model is None:
         return JSONResponse(
             status_code=500,
@@ -60,25 +60,20 @@ async def predict(file: UploadFile = File(...), lang: str = "en"):
         )
 
     try:
-        # Read and preprocess the image
         raw = await file.read()
         img = Image.open(io.BytesIO(raw)).convert("RGB").resize((224, 224))
         
-        # Teachable Machine requires normalization to [-1, 1]
         img_array = np.asarray(img, dtype=np.float32)
         normalized_image_array = (img_array / 127.5) - 1
         data = np.expand_dims(normalized_image_array, axis=0)
 
-        # Run AI inference
         prediction = model.predict(data)
         index = np.argmax(prediction)
         confidence = float(prediction[0][index])
         
-        # Clean up the label (Teachable Machine adds numbers like "0 Book")
         raw_label = class_names[index]
         clean_label = raw_label.split(" ", 1)[-1].strip() 
 
-        # Get the translation
         word = TRANSLATIONS.get(clean_label, {}).get(lang, clean_label)
 
         print(f"📸 AI guessed: {clean_label} ({confidence:.2%}). Word: {word}")
