@@ -1,7 +1,6 @@
 fastapi
 uvicorn[standard]
 pillow
-tensorflow-cpu==2.15.1
+tflite-runtime
 numpy
 python-multipart
-h5py
