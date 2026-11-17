@@ -1,11 +1,11 @@
+import os
 from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import JSONResponse
 from PIL import Image
 import numpy as np
 import io
-import tflite_runtime.interpreter as tflite
-import os
 import uvicorn
+from ai_edge_litert.interpreter import Interpreter
 
 app = FastAPI(title="Vocab AI Server")
 
@@ -13,8 +13,10 @@ app = FastAPI(title="Vocab AI Server")
 # 1. LOAD TFLITE MODEL & LABELS
 # ==========================================
 model_path = "model_unquant.tflite"
+interpreter = None
+
 try:
-    interpreter = tflite.Interpreter(model_path=model_path)
+    interpreter = Interpreter(model_path=model_path)
     interpreter.allocate_tensors()
     
     input_details = interpreter.get_input_details()
@@ -25,7 +27,6 @@ try:
     print("✅ TFLite Model loaded successfully!")
 except Exception as e:
     print(f"❌ ERROR LOADING MODEL: {e}")
-    interpreter = None
 
 # ==========================================
 # 2. TRANSLATIONS
@@ -53,6 +54,9 @@ TRANSLATIONS = {
     "Ruler": {"ar": "مسطرة", "en": "ruler", "de": "Lineal"}
 }
 
+# ==========================================
+# 3. API ENDPOINTS
+# ==========================================
 @app.get("/health")
 def health():
     return {"status": "ok", "model_loaded": interpreter is not None}
@@ -70,7 +74,7 @@ async def predict(file: UploadFile = File(...), lang: str = "en"):
         raw = await file.read()
         img = Image.open(io.BytesIO(raw)).convert("RGB").resize((224, 224))
         
-        # Normalize to [-1, 1]
+        # Normalize to [-1, 1] (Teachable Machine standard)
         img_array = np.asarray(img, dtype=np.float32)
         normalized_image_array = (img_array / 127.5) - 1
         data = np.expand_dims(normalized_image_array, axis=0)
@@ -83,7 +87,7 @@ async def predict(file: UploadFile = File(...), lang: str = "en"):
         index = np.argmax(prediction)
         confidence = float(prediction[0][index])
         
-        # Clean up the label
+        # Clean up the label (Teachable Machine adds numbers like "0 Book")
         raw_label = class_names[index]
         clean_label = raw_label.split(" ", 1)[-1].strip() 
 
