@@ -9,106 +9,130 @@ from ai_edge_litert.interpreter import Interpreter
 
 app = FastAPI(title="Vocab AI Server")
 
-# ==========================================
-# 1. LOAD TFLITE MODEL & LABELS
-# ==========================================
+# --- Rejection thresholds (tune here, no Pico reflash) ---
+MIN_TOP1_CONFIDENCE = 0.75
+MIN_TOP1_TOP2_MARGIN = 0.15
+
+# 1. Load model & labels
 model_path = "model_unquant.tflite"
 interpreter = None
+input_details = None
+output_details = None
+class_names = []
 
 try:
     interpreter = Interpreter(model_path=model_path)
     interpreter.allocate_tensors()
-    
     input_details = interpreter.get_input_details()
     output_details = interpreter.get_output_details()
-    
     with open("labels.txt", "r") as f:
-        class_names = [line.strip() for line in f.readlines()]
-    print("✅ TFLite Model loaded successfully!")
+        class_names = [line.strip() for line in f.readlines() if line.strip()]
+    print(f"✅ TFLite loaded. Input {input_details[0]['shape']} / {input_details[0]['dtype']}")
+    print(f"✅ {len(class_names)} labels.")
 except Exception as e:
     print(f"❌ ERROR LOADING MODEL: {e}")
 
-# ==========================================
-# 2. TRANSLATIONS
-# ==========================================
+# 2. Translations — keys match labels.txt; Pen added; typo Hairbrash preserved
 TRANSLATIONS = {
     "Ball": {"ar": "الكرة", "en": "ball", "de": "Ball"},
-    "Cell Phone": {"ar": "هاتف محمول", "en": "cell phone", "de": "Handy"},
+    "Cell phone": {"ar": "هاتف محمول", "en": "cell phone", "de": "Handy"},
     "Shoe": {"ar": "حذاء", "en": "shoe", "de": "Schuh"},
     "Teddy Bear": {"ar": "دبدوب", "en": "teddy bear", "de": "Teddybär"},
-    "TV Remote": {"ar": "جهاز التحكم", "en": "TV remote", "de": "Fernbedienung"},
+    "TV remote": {"ar": "جهاز التحكم", "en": "TV remote", "de": "Fernbedienung"},
     "Bowl": {"ar": "وعاء", "en": "bowl", "de": "Schüssel"},
     "Cup": {"ar": "كوب", "en": "cup", "de": "Tasse"},
     "Plate": {"ar": "طبق", "en": "plate", "de": "Teller"},
     "Spoon": {"ar": "ملعقة", "en": "spoon", "de": "Löffel"},
-    "Water Bottle": {"ar": "زجاجة ماء", "en": "water bottle", "de": "Wasserflasche"},
-    "Hairbrush": {"ar": "فرشاة شعر", "en": "hairbrush", "de": "Haarbürste"},
+    "Water bottle": {"ar": "زجاجة ماء", "en": "water bottle", "de": "Wasserflasche"},
+    "Hairbrash": {"ar": "فرشاة شعر", "en": "hairbrush", "de": "Haarbürste"},  # matches labels.txt typo
     "Shampoo": {"ar": "شامبو", "en": "shampoo", "de": "Shampoo"},
-    "Soap": {"ar": "صابون", "en": "soap", "de": "Seife"},
+    "soap": {"ar": "صابون", "en": "soap", "de": "Seife"},
     "Toothbrush": {"ar": "فرشاة أسنان", "en": "toothbrush", "de": "Zahnbürste"},
     "Towel": {"ar": "منشفة", "en": "towel", "de": "Handtuch"},
     "Backpack": {"ar": "حقيبة ظهر", "en": "backpack", "de": "Rucksack"},
     "Book": {"ar": "كتاب", "en": "book", "de": "Buch"},
     "Eraser": {"ar": "ممحاة", "en": "eraser", "de": "Radiergummi"},
     "Notebook": {"ar": "دفتر", "en": "notebook", "de": "Notizbuch"},
-    "Ruler": {"ar": "مسطرة", "en": "ruler", "de": "Lineal"}
+    "Pen": {"ar": "قلم", "en": "pen", "de": "Stift"},
+    "Ruler": {"ar": "مسطرة", "en": "ruler", "de": "Lineal"},
 }
+_TRANSLATIONS_CI = {k.strip().lower(): v for k, v in TRANSLATIONS.items()}
 
-# ==========================================
-# 3. API ENDPOINTS
-# ==========================================
+def translate(clean_label, lang):
+    entry = TRANSLATIONS.get(clean_label) or _TRANSLATIONS_CI.get(clean_label.strip().lower())
+    return entry.get(lang, clean_label) if entry else clean_label
+
+def clean(raw_label):
+    return raw_label.split(" ", 1)[-1].strip()
+
+def decide(probs):
+    order = np.argsort(probs)[::-1]
+    i1, i2 = int(order[0]), int(order[1])
+    top1, top2 = float(probs[i1]), float(probs[i2])
+    margin = top1 - top2
+    if top1 < MIN_TOP1_CONFIDENCE:
+        return False, "low_confidence", i1, i2, top1, top2, margin
+    if margin < MIN_TOP1_TOP2_MARGIN:
+        return False, "ambiguous", i1, i2, top1, top2, margin
+    return True, "ok", i1, i2, top1, top2, margin
+
+# 3. Endpoints
 @app.get("/health")
 def health():
-    return {"status": "ok", "model_loaded": interpreter is not None}
+    return {
+        "status": "ok",
+        "model_loaded": interpreter is not None,
+        "labels": len(class_names),
+        "min_confidence": MIN_TOP1_CONFIDENCE,
+        "min_margin": MIN_TOP1_TOP2_MARGIN,
+    }
 
 @app.post("/predict")
 async def predict(file: UploadFile = File(...), lang: str = "en"):
     if interpreter is None:
-        return JSONResponse(
-            status_code=500,
-            content={"success": False, "error": "AI Model failed to load on server."}
-        )
-
+        return JSONResponse({"success": False, "accepted": False,
+                             "reason": "no_model", "word": None, "language": lang})
     try:
-        # Read and preprocess the image
         raw = await file.read()
         img = Image.open(io.BytesIO(raw)).convert("RGB").resize((224, 224))
-        
-        # Normalize to [-1, 1] (Teachable Machine standard)
-        img_array = np.asarray(img, dtype=np.float32)
-        normalized_image_array = (img_array / 127.5) - 1
-        data = np.expand_dims(normalized_image_array, axis=0)
+        arr = np.asarray(img, dtype=np.float32)
+        arr = (arr / 127.5) - 1.0
+        data = np.expand_dims(arr, axis=0).astype(input_details[0]["dtype"])
 
-        # Run AI inference using TFLite
-        interpreter.set_tensor(input_details[0]['index'], data)
+        interpreter.set_tensor(input_details[0]["index"], data)
         interpreter.invoke()
-        prediction = interpreter.get_tensor(output_details[0]['index'])
-        
-        index = np.argmax(prediction)
-        confidence = float(prediction[0][index])
-        
-        # Clean up the label (Teachable Machine adds numbers like "0 Book")
-        raw_label = class_names[index]
-        clean_label = raw_label.split(" ", 1)[-1].strip() 
+        probs = interpreter.get_tensor(output_details[0]["index"])[0]
 
-        # Get the translation
-        word = TRANSLATIONS.get(clean_label, {}).get(lang, clean_label)
+        accepted, reason, i1, i2, top1, top2, margin = decide(probs)
+        label = clean(class_names[i1])
+        top2_label = clean(class_names[i2])
 
-        print(f"📸 AI guessed: {clean_label} ({confidence:.2%}). Word: {word}")
+        if not accepted:
+            print(f"🚫 Rejected ({reason}): {label} {top1:.3f} vs {top2_label} {top2:.3f} "
+                  f"margin={margin:.3f} lang={lang}")
+            return JSONResponse({
+                "success": True, "accepted": False, "reason": reason,
+                "word": None, "label": label,
+                "confidence": round(top1, 4),
+                "top2_label": top2_label, "top2_confidence": round(top2, 4),
+                "margin": round(margin, 4), "language": lang,
+            })
 
+        word = translate(label, lang)
+        print(f"📸 Accepted: {label} ({top1:.2%}) -> {word} [{lang}] margin={margin:.3f}")
         return JSONResponse({
-            "success": True,
-            "label": clean_label,
-            "word": word,
-            "confidence": round(confidence, 4),
-            "language": lang
+            "success": True, "accepted": True, "reason": "ok",
+            "label": label, "word": word,
+            "confidence": round(top1, 4),
+            "top2_label": top2_label, "top2_confidence": round(top2, 4),
+            "margin": round(margin, 4), "language": lang,
         })
-        
     except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content={"success": False, "error": str(e)}
-        )
+        print(f"❌ Error: {e}")
+        return JSONResponse(status_code=500, content={
+            "success": False, "accepted": False, "reason": "bad_image",
+            "error": str(e), "language": lang,
+        })
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
