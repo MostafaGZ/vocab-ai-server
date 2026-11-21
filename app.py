@@ -39,7 +39,7 @@ TRANSLATIONS = {
     "Shoe": {"ar": "حذاء", "en": "shoe", "de": "Schuh"},
     "Teddy Bear": {"ar": "دبدوب", "en": "teddy bear", "de": "Teddybär"},
     "TV remote": {"ar": "جهاز التحكم", "en": "TV remote", "de": "Fernbedienung"},
-    "Bowl": {"ar": "وعاء", "en": "bowl", "de": "Schüssel"},
+    "Egg": {"ar": "بيضة", "en": "egg", "de": "das Ei"},
     "Cup": {"ar": "كوب", "en": "cup", "de": "Tasse"},
     "Plate": {"ar": "طبق", "en": "plate", "de": "Teller"},
     "Spoon": {"ar": "ملعقة", "en": "spoon", "de": "Löffel"},
