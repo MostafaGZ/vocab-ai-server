@@ -3,7 +3,7 @@
 2 Shoe
 3 Teddy Bear
 4 TV remote
-5 Bowl
+5 Egg
 6 Cup
 7 Plate
 8 Spoon
@@ -16,5 +16,5 @@
 15 Book
 16 Eraser
 17 Backpack
-18 Notebook
+18 Pen
 19 Ruler
